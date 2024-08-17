@@ -1,0 +1,229 @@
+import pandas as pd
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+from itertools import combinations
+
+# Initialize the grade sheet and checkboxes
+grade_sheet = pd.DataFrame(columns=['Course', 'Grade', 'Points', 'Binary'])
+binary_checkboxes = {}
+remaining_binary_points = 0
+selected_courses = set()
+
+# Functions -------------------------------------------------------------------
+
+# Function to add course data
+def add_Course_Data(course, grade, points):
+    global grade_sheet
+    # Validate inputs
+    if grade < 0 or grade > 100:
+        show_alert("Grade must be between 0 and 100.")
+        return
+    if points <= 0 or points > 10:
+        show_alert("Points must be between 0 and 10.")
+        return
+
+    # Append to the data frame
+    new_data = pd.DataFrame({
+        'Course': [course],
+        'Grade': [grade],
+        'Points': [points],
+        'Binary': [False]  # Initialize with Binary as False
+    })
+    grade_sheet = pd.concat([grade_sheet, new_data], ignore_index=True)
+
+    # Reset input fields and update display
+    course_input.value = ''
+    grade_input.value = 0
+    points_input.value = 0.0
+    update_display()
+    create_binary_checkboxes()
+
+# Function to remove a course
+def remove_course(course_name):
+    global grade_sheet
+    # Remove the selected course
+    grade_sheet = grade_sheet[grade_sheet['Course'] != course_name]
+    update_display()
+    create_binary_checkboxes()
+
+# Update the display with the grade sheet
+def update_display():
+    with output:
+        clear_output(wait=True)
+        display(grade_sheet)
+        update_dropdown()
+        reset_checkboxes()
+
+# Create checkboxes for binary courses
+def create_binary_checkboxes():
+    binary_checkboxes_area.children = []
+    global binary_checkboxes
+    binary_checkboxes = {}
+    label = widgets.Label("Select Binary Courses:")
+    binary_checkboxes_area.children += (label,)
+
+    for course in grade_sheet['Course']:
+        checkbox = widgets.Checkbox(value=False, description=course)
+        checkbox.observe(on_checkbox_change, names='value')
+        binary_checkboxes[course] = checkbox
+        binary_checkboxes_area.children += (checkbox,)
+
+    reset_checkboxes()
+
+# Handle changes in checkbox state
+def on_checkbox_change(change):
+    global remaining_binary_points
+    selected_course = change['owner'].description
+    selected_course_points = grade_sheet.loc[grade_sheet['Course'] == selected_course, 'Points'].values[0]
+
+    if change['new']:  # If checkbox is checked
+        total_points = sum(
+            grade_sheet.loc[grade_sheet['Course'] == course, 'Points'].values[0]
+            for course in binary_checkboxes.keys()
+            if binary_checkboxes[course].value
+        )
+        if total_points > remaining_binary_points:
+            # Undo the last selection if it exceeds binary points
+            change['owner'].value = False
+            show_alert(f"Selection exceeds binary points. {selected_course} has been deselected.")
+        else:
+            # Mark the course as binary
+            grade_sheet.loc[grade_sheet['Course'] == selected_course, 'Binary'] = True
+            # Add to selected courses
+            selected_courses.add(selected_course)
+    else:  # If checkbox is unchecked
+        # Mark the course as not binary
+        grade_sheet.loc[grade_sheet['Course'] == selected_course, 'Binary'] = False
+        # Remove from selected courses
+        if selected_course in selected_courses:
+            selected_courses.remove(selected_course)
+    
+    update_display()  # Update the table display with the new binary info
+
+# Enable/disable checkboxes based on binary points
+def reset_checkboxes():
+    global remaining_binary_points
+    if points_for_binary_input.value <= 0:
+        # Disable all checkboxes if binary points are 0
+        for checkbox in binary_checkboxes.values():
+            checkbox.value = False
+            checkbox.disabled = True
+    else:
+        # Enable all checkboxes if binary points are positive
+        for checkbox in binary_checkboxes.values():
+            checkbox.disabled = False
+
+# Show alert messages
+def show_alert(message):
+    with output:
+        clear_output(wait=True)
+        display(grade_sheet)
+        print(message)
+
+# Update the dropdown for removing courses
+def update_dropdown():
+    remove_course_dropdown.options = grade_sheet['Course'].tolist()
+
+# Calculate the weighted average of non-binary courses
+def calculate_weighted_average():
+    non_binary_courses = grade_sheet[grade_sheet['Binary'] == False]
+    total_weight = non_binary_courses['Points'].sum()
+    if total_weight == 0:
+        return 0
+    weighted_sum = (non_binary_courses['Grade'] * non_binary_courses['Points']).sum()
+    return weighted_sum / total_weight
+
+# Function to choose the best combination of courses to mark as binary
+def choose_best_combination():
+    global remaining_binary_points
+    best_combination = None
+    best_average = calculate_weighted_average()
+    
+    courses = grade_sheet[grade_sheet['Binary'] == False]
+    num_courses = len(courses)
+
+    # Check all combinations of courses to put as binary
+    for r in range(1, num_courses + 1):
+        for combination in combinations(courses.index, r):
+            total_points = courses.loc[list(combination), 'Points'].sum()
+            if total_points <= remaining_binary_points:
+                # Temporarily set selected courses as binary
+                grade_sheet.loc[combination, 'Binary'] = True
+                current_average = calculate_weighted_average()
+                if current_average > best_average:
+                    best_average = current_average
+                    best_combination = combination
+                # Reset binary status
+                grade_sheet.loc[combination, 'Binary'] = False
+
+    if best_combination is not None:
+        best_courses = ', '.join(courses.loc[list(best_combination), 'Course'])
+        show_alert(f"I advise you to choose the courses {best_courses} to put binary on them\nYour average will be: {best_average:.2f}, and that's better!")
+    else:
+        show_alert("No better combination found with the given binary points.")
+
+# Widgets for input
+input_label = widgets.Label("Please insert course, grade, and points:")
+course_input = widgets.Text(description='Course:')
+grade_input = widgets.IntText(description='Grade:', min=0, max=100)
+points_input = widgets.FloatText(description='Points:', min=0.0, max=10.0)
+
+add_instruction = widgets.Label("If you want to add more courses, press:")
+add_button = widgets.Button(description='Add course')
+
+remove_instruction = widgets.Label("If you want to edit and remove, select course to remove:")
+remove_course_dropdown = widgets.Dropdown(description='Remove Course:', options=[])
+remove_button = widgets.Button(description='Remove Course')
+
+calculate_button = widgets.Button(description='Calculate Average')
+
+choose_best_button = widgets.Button(description='Choose the Best Combination')
+
+points_for_binary_input = widgets.IntText(
+    value=0,
+    description='Binary Points:',
+    min=0
+)
+
+binary_checkboxes_area = widgets.VBox()
+output = widgets.Output()
+
+# Update remaining binary points and checkboxes when points change
+def update_remaining_binary_points(change):
+    global remaining_binary_points
+    remaining_binary_points = points_for_binary_input.value
+    reset_checkboxes()
+    for checkbox in binary_checkboxes.values():  # Reset all checkboxes when binary points change
+        checkbox.value = False  # Reset checkboxes
+    selected_courses.clear()  # Clear selected courses
+
+# Button click actions
+def on_add_button_click(b):
+    add_Course_Data(course_input.value, grade_input.value, points_input.value)
+
+def on_remove_button_click(b):
+    if not grade_sheet.empty:
+        course_name = remove_course_dropdown.value
+        remove_course(course_name)
+
+def on_calculate_button_click(b):
+    show_alert(f"Regular Weighted Average: {calculate_weighted_average():.2f}")
+
+def on_choose_best_combination_click(b):
+    choose_best_combination()
+
+# Assign button click actions
+add_button.on_click(on_add_button_click)
+remove_button.on_click(on_remove_button_click)
+points_for_binary_input.observe(update_remaining_binary_points, names='value')
+calculate_button.on_click(on_calculate_button_click)
+choose_best_button.on_click(on_choose_best_combination_click)
+
+# Display widgets
+display(input_label, course_input, grade_input, points_input,
+        add_instruction, add_button, remove_instruction, remove_course_dropdown, remove_button,
+        points_for_binary_input, binary_checkboxes_area, calculate_button,
+        choose_best_button, output)
+
+# Initial setup
+update_dropdown()
